@@ -74,45 +74,62 @@ def format_schedule(
     group: str,
     today: date | None = None,
 ) -> str:
-    """Формирует текст сообщения для Telegram."""
+    """Формирует компактное и читаемое расписание для Telegram."""
     week_number, day_name, lessons = get_schedule(
         group, today
     )
 
+    selected_date = today or date.today()
+
     lines = [
-        f"📅 Расписание на {day_name.lower()}",
-        f"👥 Группа: {group}",
-        f"🔄 Учебная неделя: {week_number}",
+        f"📅 {day_name}, {selected_date.strftime('%d.%m.%Y')}",
+        f"👥 {group} · Учебная неделя {week_number}",
         "",
     ]
 
     if not lessons:
-        lines.append("На сегодня занятий нет 🎉")
+        lines.append("🎉 На этот день занятий нет!")
         return "\n".join(lines)
 
-    for lesson in sorted(
+    sorted_lessons = sorted(
         lessons,
         key=lambda item: item["lesson_number"],
-    ):
+    )
+
+    for index, lesson in enumerate(sorted_lessons):
         number = lesson["lesson_number"]
         subject = lesson["subject"]
+        lesson_type = lesson.get("type")
+        room = lesson.get("room")
+        teacher = lesson.get("teacher")
 
+        # Название предмета
+        lines.append(f"{number}️⃣ {subject}")
+
+        # Тип занятия и аудитория
         details = []
 
-        if lesson.get("type"):
-            details.append(lesson["type"])
+        if lesson_type:
+            type_emoji = (
+                "📖" if "лек" in lesson_type.lower()
+                else "🧪" if "лаб" in lesson_type.lower()
+                else "📝"
+            )
+            details.append(f"{type_emoji} {lesson_type}")
 
-        if lesson.get("room"):
-            details.append(f"ауд. {lesson['room']}")
 
-        if lesson.get("teacher"):
-            details.append(lesson["teacher"])
-
-        lines.append(f"📚 {number}. {subject}")
+        if room:
+            details.append(f"🚪 Ауд. {room}")
 
         if details:
-            lines.append("   " + " | ".join(details))
+            lines.append(" · ".join(details))
 
-        lines.append("")
+        # Преподаватель
+        if teacher:
+            lines.append(f"👤 {teacher}")
 
-    return "\n".join(lines).rstrip()
+        # Разделитель между парами
+        if index < len(sorted_lessons) - 1:
+            lines.append("")
+
+    return "\n".join(lines)
