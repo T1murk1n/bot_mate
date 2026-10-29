@@ -3,6 +3,7 @@ import os
 from datetime import date, timedelta
 from pathlib import Path
 
+import re
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import (
@@ -35,8 +36,8 @@ if not TOKEN:
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Пока сохраняем выбор группы в памяти.
-# При перезапуске бота пользователь выберет группу снова.
+# Выбранная группа хранится в памяти.
+# При перезапуске бота её потребуется ввести заново.
 user_groups: dict[int, str] = {}
 
 
@@ -46,21 +47,15 @@ def get_groups() -> list[str]:
     return list(data.get("groups", {}).keys())
 
 
-def get_group_keyboard() -> InlineKeyboardMarkup:
-    """Создаёт клавиатуру выбора учебной группы."""
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text=group,
-                callback_data=f"group:{group}",
-            )
-        ]
-        for group in get_groups()
-    ]
+def find_group(user_input: str) -> str | None:
+    """Находит группу без учёта регистра и крайних пробелов."""
+    normalized_input = user_input.strip().casefold()
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=buttons
-    )
+    for group in get_groups():
+        if group.casefold() == normalized_input:
+            return group
+
+    return None
 
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
@@ -68,7 +63,7 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Расписание")],
-            [KeyboardButton(text="Сменить группу")],
+            [KeyboardButton(text="Звонки")],
         ],
         resize_keyboard=True,
     )
@@ -85,69 +80,82 @@ def get_schedule_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="◀ Предыдущий день",
+                    text="◀️ Предыдущий день",
                     callback_data=f"day:{previous_day.isoformat()}",
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
-                    text="Следующий день ▶",
+                    text="Следующий день ▶️",
                     callback_data=f"day:{next_day.isoformat()}",
-                ),
-            ]
+                )
+            ],
         ]
     )
 
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    """Обрабатывает команду /start."""
+    """Просит пользователя указать учебную группу."""
     user_id = message.from_user.id
+    current_group = user_groups.get(user_id)
 
-    if user_id in user_groups:
+    if current_group:
         await message.answer(
-            f"Твоя группа: {user_groups[user_id]}\n"
-            "Нажми «Расписание», чтобы посмотреть занятия.",
+            f"Текущая группа: {current_group}\n\n"
+            "Введи название другой группы, чтобы изменить её, "
+            "или нажми «Расписание», чтобы продолжить.",
             reply_markup=get_main_keyboard(),
         )
         return
 
     await message.answer(
-        "Привет! 👋\nВыбери свою учебную группу:",
-        reply_markup=get_group_keyboard(),
+        "Привет! 👋\n\n"
+        "Введи название своей учебной группы.\n"
+        "Например: ПРИ-О-23/1"
     )
 
 
-@dp.callback_query(F.data.startswith("group:"))
-async def select_group(callback: CallbackQuery):
-    """Сохраняет выбранную учебную группу."""
-    group = callback.data.split(":", 1)[1]
+@dp.message(F.text.regexp(r"(?i)^препод\s+(.+?)\s*$"))
+async def find_teacher(message: Message):
+    """Находит полное ФИО преподавателя по фамилии."""
+    from schedule_service import load_details
 
-    if group not in get_groups():
-        await callback.answer(
-            "Такая группа не найдена.",
-            show_alert=True,
-        )
+    match = re.match(
+        r"(?i)^препод\s+(.+?)\s*$",
+        message.text.strip(),
+    )
+
+    if not match:
         return
 
-    user_groups[callback.from_user.id] = group
+    surname = match.group(1).strip()
 
-    await callback.answer("Группа выбрана!")
+    details = load_details()
+    teachers = details.get("teachers", {})
 
-    await callback.message.answer(
-        f"Группа {group} выбрана ✅\n"
-        "Теперь нажми «Расписание».",
-        reply_markup=get_main_keyboard(),
+    # Ищем фамилию без учёта регистра.
+    for key, full_name in teachers.items():
+        if key.strip().casefold() == surname.casefold():
+            await message.answer(
+                f"👨‍🏫 {full_name}"
+            )
+            return
+
+    await message.answer(
+        f"❌ Преподаватель «{surname}» не найден.\n\n"
+        "Проверь фамилию и попробуй ещё раз."
     )
 
 
-@dp.message(F.text == "Расписание")
+@dp.message(F.text.regexp(r"(?i)^расписание$"))
 async def send_schedule(message: Message):
     """Отправляет расписание на текущий день."""
     group = user_groups.get(message.from_user.id)
 
     if not group:
         await message.answer(
-            "Сначала выбери учебную группу:",
-            reply_markup=get_group_keyboard(),
+            "Сначала введи название своей учебной группы."
         )
         return
 
@@ -172,6 +180,23 @@ async def send_schedule(message: Message):
         await message.answer(str(error))
 
 
+@dp.message(F.text.regexp(r"(?i)^звонки$"))
+async def send_bell_schedule(message: Message):
+    """Отправляет расписание звонков."""
+    await message.answer(
+        "🔔 Расписание звонков\n\n"
+        "1️⃣  08:00–09:20\n"
+        "2️⃣  09:30–10:50\n"
+        "3️⃣  11:00–12:20\n"
+        "4️⃣  12:45–14:05\n"
+        "5️⃣  14:15–15:35\n"
+        "6️⃣  15:45–17:05\n"
+        "7️⃣  17:15–18:35\n"
+        "8️⃣  18:40–20:00",
+        reply_markup=get_main_keyboard(),
+    )
+
+
 @dp.callback_query(F.data.startswith("day:"))
 async def change_schedule_day(callback: CallbackQuery):
     """Переключает расписание на выбранную дату."""
@@ -179,7 +204,7 @@ async def change_schedule_day(callback: CallbackQuery):
 
     if not group:
         await callback.answer(
-            "Сначала выбери учебную группу.",
+            "Сначала введи название своей учебной группы.",
             show_alert=True,
         )
         return
@@ -219,12 +244,37 @@ async def change_schedule_day(callback: CallbackQuery):
         )
 
 
-@dp.message(F.text == "Сменить группу")
-async def change_group(message: Message):
-    """Предлагает выбрать другую учебную группу."""
+@dp.message(F.text)
+async def handle_text(message: Message):
+    """
+    Обрабатывает ввод названия группы.
+    Если пользователь вводит другую существующую группу,
+    его выбор обновляется.
+    """
+    user_input = message.text.strip()
+
+    group = find_group(user_input)
+
+    if group is None:
+        available_groups = "\n".join(
+            f"• {name}" for name in get_groups()
+        )
+
+        await message.answer(
+            "❌ Такая группа не найдена.\n\n"
+            "Проверь название и попробуй ещё раз.\n\n"
+            "Доступные группы:\n"
+            f"{available_groups}"
+        )
+        return
+
+    user_groups[message.from_user.id] = group
+
     await message.answer(
-        "Выбери новую учебную группу:",
-        reply_markup=get_group_keyboard(),
+        f"✅ Группа успешно выбрана: {group}\n\n"
+        "Теперь нажми «Расписание», чтобы посмотреть занятия.\n"
+        "Чтобы сменить группу, просто введи её новое название.",
+        reply_markup=get_main_keyboard(),
     )
 
 
