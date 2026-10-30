@@ -2,7 +2,8 @@
 import json
 from datetime import date, timedelta
 from pathlib import Path
-import re
+
+from input_service import find_teachers
 
 BASE_DIR = Path(__file__).parent
 
@@ -101,33 +102,11 @@ def get_schedule(
 
 
 def get_teacher_name(teacher: str, teachers: dict) -> str:
-    """Находит фамилию в записи с инициалами и подставляет ФИО."""
+    """Подставляет ФИО, только если фамилия и инициалы однозначны."""
     if not teacher:
         return ""
-
-    # Извлекаем последнее слово, состоящее из букв и дефиса.
-    # Примеры:
-    # А.С.Шабалин -> Шабалин
-    # А. С. Шабалин -> Шабалин
-    # Шабалин -> Шабалин
-    match = re.search(
-        r"([А-ЯЁ][а-яё-]*)\s*$",
-        teacher.strip(),
-        flags=re.IGNORECASE,
-    )
-
-    if not match:
-        return teacher
-
-    surname = match.group(1)
-
-    # Сопоставляем ключи справочника без учёта регистра.
-    for key, full_name in teachers.items():
-        if key.strip().casefold() == surname.casefold():
-            return full_name
-
-    # Если соответствие не найдено, сохраняем исходное значение.
-    return teacher
+    matches = find_teachers(teacher, teachers)
+    return matches[0] if len(matches) == 1 else teacher
 
 
 
