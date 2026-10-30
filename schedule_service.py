@@ -6,7 +6,7 @@ import re
 
 BASE_DIR = Path(__file__).parent
 
-SCHEDULE_FILE = BASE_DIR / "schedules.json"
+SCHEDULE_FILE = BASE_DIR / "schedules_all.json"
 DETAILS_FILE = BASE_DIR / "schedule_details.json"
 
 # Понедельник первой учебной недели
