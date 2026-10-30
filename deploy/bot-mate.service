@@ -1,0 +1,28 @@
+[Unit]
+Description=Telegram schedule bot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=bot-mate
+Group=bot-mate
+WorkingDirectory=/opt/bot-mate/current
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=Asia/Tbilisi
+EnvironmentFile=/etc/bot-mate/bot.env
+ExecStart=/opt/bot-mate/current/.venv/bin/python /opt/bot-mate/current/bot.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target
