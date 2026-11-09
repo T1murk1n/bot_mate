@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 from input_service import (
     extract_teacher_query,
+    extract_teacher_schedule_query,
     find_group as match_group,
     find_teachers,
     looks_like_group,
@@ -33,6 +34,9 @@ from schedule_service import (
     load_schedules,
     load_details,
     format_schedule,
+    format_teacher_schedule,
+    get_schedule_teachers,
+    split_schedule_text,
     START_DATE,
 )
 
@@ -125,30 +129,42 @@ async def start(message: Message, state: FSMContext):
         "Введи название своей учебной группы.\n"
         "Например: ПРИ-О-23/1.\n\n"
         "Можно также написать фамилию преподавателя, например: Андреев.\n"
+        "Все пары преподавателя на неделю: Где Андреев.\n"
         "Для расписания на другой день отправь дату: 05.11.2026.\n"
         "Список групп: /groups",
         reply_markup=get_main_keyboard(),
     )
 
 
-async def request_teacher_surname(message: Message, state: FSMContext):
+async def request_teacher_surname(
+    message: Message, state: FSMContext, weekly_schedule: bool = False,
+):
     """Включает поиск преподавателя по следующему сообщению."""
     await state.clear()
     await state.set_state(TeacherSearch.surname)
+    await state.update_data(teacher_schedule=weekly_schedule)
+    prompt = (
+        "Введи фамилию преподавателя, чтобы увидеть его расписание на всю текущую неделю.\n"
+        if weekly_schedule else "Введи фамилию преподавателя.\n"
+    )
     await message.answer(
-        "Введи фамилию преподавателя.\n"
-        "Например: Андреев или Андреева.\n\n"
+        prompt + "Например: Андреев или Андреева.\n\n"
         "Фамилию можно писать и без нажатия кнопки.\n"
         "Для выхода выбери другую кнопку или отправь /cancel.",
         reply_markup=get_main_keyboard(),
     )
 
 
-async def find_teacher(message: Message, state: FSMContext, query: str):
+async def find_teacher(
+    message: Message, state: FSMContext, query: str,
+    weekly_schedule: bool | None = None,
+):
     """Ищет преподавателя и уточняет имя при совпадении фамилий."""
-    teachers = load_details().get("teachers", {})
-    matches = find_teachers(query, teachers)
     context = await state.get_data()
+    if weekly_schedule is None:
+        weekly_schedule = context.get("teacher_schedule", False)
+    teachers = get_schedule_teachers() if weekly_schedule else load_details().get("teachers", {})
+    matches = find_teachers(query, teachers)
     if not matches and context.get("teacher_candidates"):
         matches = [
             name for name in context["teacher_candidates"]
@@ -157,15 +173,25 @@ async def find_teacher(message: Message, state: FSMContext, query: str):
         ]
     if len(matches) == 1:
         await state.clear()
+        if weekly_schedule:
+            try:
+                text = format_teacher_schedule(matches[0])
+            except ValueError as error:
+                await message.answer(str(error), reply_markup=get_main_keyboard())
+                return
+            for part in split_schedule_text(text):
+                await message.answer(part, reply_markup=get_main_keyboard())
+            return
         await message.answer(f"👨‍🏫 {matches[0]}", reply_markup=get_main_keyboard())
         return
     await state.set_state(TeacherSearch.surname)
+    await state.update_data(teacher_schedule=weekly_schedule)
     if matches:
         await state.update_data(teacher_candidates=matches)
         names = "\n".join(f"• {name}" for name in matches)
         await message.answer(
             f"Нашлось несколько преподавателей:\n{names}\n\n"
-            "Уточни имя или введи фамилию вместе с именем.",
+            "Уточни имя или инициалы, либо введи ФИО.",
             reply_markup=get_main_keyboard(),
         )
         return
@@ -319,6 +345,7 @@ async def send_help(message: Message):
         "Выбери кнопку меню или напиши:\n"
         "• фамилию преподавателя: Андреев;\n"
         "• фамилию с командой: препод Андреев;\n"
+        "• все пары преподавателя на текущую неделю: Где Андреев;\n"
         "• свою группу: ПРИ-О-23/1.\n\n"
         "На другой день: 05.11.2026, 05.11 или «расписание на 05.11».\n"
         "Можно также написать «завтра» или нажать «На дату».\n\n"
@@ -380,6 +407,14 @@ async def handle_text(message: Message, state: FSMContext):
             f"Доступные группы:\n{groups}\n\nВведи название своей группы.",
             reply_markup=get_main_keyboard(),
         )
+        return
+    weekly_query = extract_teacher_schedule_query(user_input)
+    if weekly_query is not None:
+        await state.clear()
+        if weekly_query:
+            await find_teacher(message, state, weekly_query, weekly_schedule=True)
+        else:
+            await request_teacher_surname(message, state, weekly_schedule=True)
         return
     try:
         selected_date = parse_schedule_date(user_input)

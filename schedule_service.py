@@ -1,5 +1,6 @@
 
 import json
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -107,6 +108,113 @@ def get_teacher_name(teacher: str, teachers: dict) -> str:
         return ""
     matches = find_teachers(teacher, teachers)
     return matches[0] if len(matches) == 1 else teacher
+
+
+def _schedule_teacher_names(data: dict, teachers: dict) -> dict[str, str]:
+    """Resolve schedule names, retaining initials absent from the directory."""
+    names = {}
+    for group in data.get("groups", {}).values():
+        for week in group.get("weeks", {}).values():
+            for lessons in week.values():
+                for lesson in lessons:
+                    raw_name = lesson.get("teacher", "").strip()
+                    if not raw_name or raw_name in names:
+                        continue
+                    name = get_teacher_name(raw_name, teachers)
+                    if name == raw_name:
+                        parts = re.findall(r"[^\W\d_]+(?:-[^\W\d_]+)*", raw_name)
+                        if (len(parts) >= 2 and len(parts[-1]) > 2
+                                and all(len(part) <= 2 for part in parts[:-1])):
+                            name = f"{parts[-1]} {'. '.join(parts[:-1])}."
+                    names[raw_name] = name
+    return names
+
+
+def get_schedule_teachers() -> dict[str, str]:
+    """Include teachers known only by initials in the schedule search."""
+    teachers = load_details().get("teachers", {})
+    return {**teachers, **_schedule_teacher_names(load_schedules(), teachers)}
+
+
+def get_teacher_schedule(
+    teacher: str,
+    today: date | None = None,
+) -> tuple[int, date, dict[str, list[dict]]]:
+    """Collect a teacher's entire current week across all available groups."""
+    selected_date = today or date.today()
+    week_number = get_current_week(selected_date)
+    week_start = selected_date - timedelta(days=selected_date.weekday())
+    data = load_schedules()
+    names = _schedule_teacher_names(data, load_details().get("teachers", {}))
+    schedule = {}
+    for day_name in DAY_NAMES:
+        combined = {}
+        for group_name, group in data.get("groups", {}).items():
+            lessons = group.get("weeks", {}).get(f"week_{week_number}", {}).get(day_name, [])
+            for lesson in lessons:
+                if names.get(lesson.get("teacher", "").strip()) != teacher:
+                    continue
+                key = (
+                    int(lesson["lesson_number"]), lesson.get("subject", ""),
+                    lesson.get("type", ""), lesson.get("room", ""),
+                )
+                if key not in combined:
+                    combined[key] = {**lesson, "lesson_number": key[0], "groups": []}
+                if group_name not in combined[key]["groups"]:
+                    combined[key]["groups"].append(group_name)
+        schedule[day_name] = [combined[key] for key in sorted(combined)]
+        for lesson in schedule[day_name]:
+            lesson["groups"].sort()
+    return week_number, week_start, schedule
+
+
+def format_teacher_schedule(teacher: str, today: date | None = None) -> str:
+    """Format dates, times and places for every day of a teacher's week."""
+    week_number, week_start, schedule = get_teacher_schedule(teacher, today)
+    week_end = week_start + timedelta(days=6)
+    rooms = load_details().get("rooms", {})
+    sections = [
+        f"👨‍🏫 {teacher}\n"
+        f"Расписание на неделю {week_start:%d.%m.%Y}–{week_end:%d.%m.%Y}\n"
+        f"Учебная неделя: {week_number}\n"
+        "По всем доступным группам."
+    ]
+    if not any(schedule.values()):
+        return "\n\n".join(sections + ["На эту неделю занятий в расписании нет."])
+    for offset, (day_name, lessons) in enumerate(schedule.items()):
+        day = week_start + timedelta(days=offset)
+        sections.append(f"{day_name}, {day:%d.%m}")
+        if not lessons:
+            sections.append("Занятий в расписании нет.")
+        for lesson in lessons:
+            number = lesson["lesson_number"]
+            start, end = LESSON_TIMES[number]
+            subject = lesson.get("subject") or "Без названия"
+            lesson_type = get_lesson_type(lesson.get("type", ""))
+            if lesson_type:
+                subject += f" ({lesson_type})"
+            room = get_room_address(lesson.get("room", ""), rooms) or "не указана"
+            sections.append(
+                f"{number} пара · {start}–{end}\n"
+                f"{subject}\n"
+                f"Группы: {', '.join(lesson['groups'])}\n"
+                f"Аудитория: {room}"
+            )
+    return "\n\n".join(sections)
+
+
+def split_schedule_text(text: str, limit: int = 4000) -> list[str]:
+    """Keep long weekly schedules within Telegram's message size limit."""
+    chunks = [""]
+    for line in text.splitlines(keepends=True):
+        if chunks[-1] and len(chunks[-1]) + len(line) > limit:
+            chunks.append("")
+        while len(line) > limit:
+            chunks[-1] += line[:limit]
+            chunks.append("")
+            line = line[limit:]
+        chunks[-1] += line
+    return [chunk.strip() for chunk in chunks if chunk.strip()]
 
 
 

@@ -2,6 +2,7 @@ import unittest
 
 from input_service import (
     extract_teacher_query,
+    extract_teacher_schedule_query,
     find_group,
     find_teachers,
     normalize_text,
@@ -83,6 +84,16 @@ class InputMatchingTests(unittest.TestCase):
                 self.assertEqual(find_group(query, self.groups), "ПРИ-О-23/1")
         self.assertIsNone(find_group("Андреев", self.groups))
         self.assertIsNone(find_group("ПРИ-О-99/1", self.groups))
+
+    def test_teacher_schedule_command(self):
+        for value in ["Где Андреев", "  ГДЕ   Андреев? ", "где:Андреев", "где — Андреев"]:
+            with self.subTest(value=value):
+                self.assertEqual(extract_teacher_schedule_query(value), "андреев")
+        self.assertEqual(extract_teacher_schedule_query("Где Егоров К. А."), "егоров к. а")
+        self.assertEqual(extract_teacher_schedule_query("Где?"), "")
+        for value in ["Андреев", "препод Андреев", "Гдеев", "Расписание", ""]:
+            with self.subTest(value=value):
+                self.assertIsNone(extract_teacher_schedule_query(value))
 
     def test_ambiguous_group_is_not_chosen(self):
         self.assertIsNone(find_group("аб12", ["АБ-1/2", "АБ-12"]))

@@ -73,6 +73,13 @@ def looks_like_group(value: str) -> bool:
     return bool(re.fullmatch(r"[а-яa-z0-9\s/_\\-]+", value) and re.search(r"\d", value))
 
 
+def extract_teacher_schedule_query(value: str) -> str | None:
+    """Extract the surname from «Где ...»; an empty query requests a prompt."""
+    value = normalize_text(value).strip(" .!?:;")
+    match = re.match(r"^где(?:\s*[:\-]\s*|\s+|$)(.*)$", value)
+    return match.group(1).strip() if match else None
+
+
 def extract_teacher_query(value: str) -> str | None:
     """None means no teacher command; an empty string means a prompt request."""
     value = normalize_text(value)
